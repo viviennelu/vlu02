@@ -1,0 +1,6 @@
+{
+  "name": "Photo to Color Palette Studio",
+  "description": "An art-directed interactive color laboratory and palette extraction studio for transforming photographs into nuanced, production-ready color palettes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

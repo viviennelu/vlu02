@@ -4,20 +4,118 @@
   --font-serif: "Cormorant Garamond", Georgia, serif;
   --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", monospace;
-  --color-canvas: #FBF9F5;
-  --color-surface: #F5F1EB;
-  --color-surface-hover: #ECE6DD;
-  --color-stone-line: #E7E0D6;
+
+  /* Paper & ink */
+  --color-canvas: #F1EDE6;        /* page: warm uncoated stock */
+  --color-paper: #F7F4EF;         /* raised sheet */
+  --color-paper-deep: #E9E4DB;    /* pressed / recessed */
+  --color-surface: #EEE9E1;
+  --color-surface-hover: #E6E0D6;
+  --color-stone-line: #E2DBD0;
+  --color-ink: #1F1B17;
+  --color-ink-soft: #5F574E;
+  --color-ink-faint: #8E857A;
+}
+
+:root {
+  /* Light from top-left: highlight above, warm shadow below. */
+  --emboss-hi: rgba(255, 255, 255, 0.75);
+  --emboss-lo: rgba(74, 58, 40, 0.10);
+  --shadow-soft: 0 1px 2px rgba(74, 58, 40, 0.06), 0 12px 32px -18px rgba(74, 58, 40, 0.22);
+  /* Very fine paper grain (SVG turbulence, ~0.5KB) */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.35 0 0 0 0 0.28 0 0 0 0 0.2 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
 body {
   font-family: var(--font-sans);
   background-color: var(--color-canvas);
-  color: #1C1917;
+  background-image: var(--paper-grain);
+  color: var(--color-ink);
   overflow-x: hidden;
 }
 
-/* Custom scrollbars for editorial finesse */
+@layer components {
+  /* A sheet resting on the page: no outline, depth from light and shadow only. */
+  .sheet {
+    background-color: var(--color-paper);
+    background-image: var(--paper-grain);
+    border-radius: 14px;
+    box-shadow: inset 0 1px 0 var(--emboss-hi), var(--shadow-soft);
+  }
+
+  /* Pressed into the page: wells, inputs, segmented-control tracks. */
+  .debossed {
+    background-color: var(--color-paper-deep);
+    border-radius: 12px;
+    box-shadow: inset 0 1px 2px var(--emboss-lo), inset 0 -1px 0 var(--emboss-hi);
+  }
+
+  /* Letterpress for display headings only. */
+  .letterpress {
+    text-shadow: 0 1px 0 var(--emboss-hi);
+  }
+
+  /* Hairline rule that reads as a fold rather than a border. */
+  .fold {
+    height: 1px;
+    background: linear-gradient(to bottom, var(--emboss-lo), var(--emboss-hi));
+    border: 0;
+  }
+
+  .btn-ink {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.5rem 1rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #F7F4EF;
+    background: var(--color-ink);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(31, 27, 23, 0.25);
+    transition: background-color 0.15s, transform 0.15s;
+    cursor: pointer;
+  }
+  .btn-ink:hover { background: #3A332C; }
+  .btn-ink:active { transform: translateY(1px); }
+  .btn-ink:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-paper {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.9rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    background: var(--color-paper);
+    box-shadow: inset 0 1px 0 var(--emboss-hi), 0 0 0 1px rgba(74, 58, 40, 0.08), 0 1px 2px rgba(74, 58, 40, 0.08);
+    transition: box-shadow 0.15s, background-color 0.15s;
+    cursor: pointer;
+  }
+  .btn-paper:hover { box-shadow: inset 0 1px 0 var(--emboss-hi), 0 0 0 1px rgba(74, 58, 40, 0.16), 0 2px 6px rgba(74, 58, 40, 0.10); }
+  .btn-paper:disabled { opacity: 0.4; cursor: not-allowed; }
+  /* Toggled on: pressed into the sheet */
+  .btn-paper[aria-pressed='true'] {
+    background: var(--color-paper-deep);
+    box-shadow: inset 0 1px 2px rgba(74, 58, 40, 0.16), inset 0 -1px 0 var(--emboss-hi);
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-faint);
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -26,9 +124,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #D8D0C5;
+  background: #D4CBBE;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #B8ADA0;
+  background: #B5AA9C;
 }

@@ -18,6 +18,8 @@ export interface ColorData {
   origin?: 'extracted' | 'interpolated' | 'curated-accent' | 'custom';
   sourceNote?: string;
   sampleLocations?: SampleLocation[];
+  /** Added by the user (Add Tone / eyedropper) rather than by extraction. */
+  userAdded?: boolean;
 }
 
 export type PaletteVariationType =
@@ -48,6 +50,8 @@ export interface SavedPalette {
   location?: string;
   notes?: string;
   journalLayout?: 'monograph' | 'polaroid' | 'field-notes';
+  /** Extracted colors in extracted order, so Reset works after reopening. */
+  originalColors?: ColorData[];
 }
 
 export function rgbToHex(r: number, g: number, b: number): string {

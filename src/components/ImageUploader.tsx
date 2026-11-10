@@ -7,11 +7,12 @@ import {
   X,
   Check,
   RotateCcw,
-  Sparkles,
+  ImageUp,
 } from 'lucide-react';
 import { SAMPLE_IMAGES } from '../data/sampleImages';
 import { CropRegion, samplePixelColor } from '../utils/colorExtraction';
 import { getColorName } from '../utils/colorUtils';
+import { ACCEPTED_IMAGE_INPUT, decodeImageFile, ImageDecodeError } from '../utils/imageDecoding';
 
 interface ImageUploaderProps {
   currentImageSrc: string | null;
@@ -22,6 +23,7 @@ interface ImageUploaderProps {
     rgb: { r: number; g: number; b: number };
     hsl: { h: number; s: number; l: number };
   }) => void;
+  onError?: (message: string) => void;
   activeRegion: CropRegion | null;
   isProcessing: boolean;
   paletteCount?: number;
@@ -33,6 +35,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   onImageSelected,
   onRegionSelected,
   onPixelPicked,
+  onError,
   activeRegion,
   isProcessing,
   paletteCount = 0,
@@ -43,6 +46,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [isDecoding, setIsDecoding] = useState(false);
   const [eyedropperActive, setEyedropperActive] = useState(false);
   const [regionSelectActive, setRegionSelectActive] = useState(false);
 
@@ -77,26 +81,18 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
   }, []);
 
   const processFile = useCallback(
-    (file: File) => {
-      if (!file.type.startsWith('image/')) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const result = e.target?.result as string;
-        if (result) {
-          const tempImg = new Image();
-          tempImg.onload = () => {
-            onImageSelected(result, {
-              name: file.name,
-              width: tempImg.naturalWidth,
-              height: tempImg.naturalHeight,
-            });
-          };
-          tempImg.src = result;
-        }
-      };
-      reader.readAsDataURL(file);
+    async (file: File) => {
+      setIsDecoding(true);
+      try {
+        const decoded = await decodeImageFile(file);
+        onImageSelected(decoded.src, { name: file.name, width: decoded.width, height: decoded.height });
+      } catch (err) {
+        onError?.(err instanceof ImageDecodeError ? err.message : `Couldn't open "${file.name}".`);
+      } finally {
+        setIsDecoding(false);
+      }
     },
-    [onImageSelected]
+    [onImageSelected, onError]
   );
 
   const handleDrop = useCallback(
@@ -116,6 +112,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     if (files && files.length > 0) {
       processFile(files[0]);
     }
+    // Allow re-selecting the same file after an error
+    e.target.value = '';
   };
 
   /**
@@ -256,88 +254,84 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     };
   }
 
+  const loadSample = (sample: (typeof SAMPLE_IMAGES)[number]) =>
+    onImageSelected(sample.src, { name: sample.title, width: 1200, height: 800 });
+
+  const paletteFull = paletteCount >= maxPaletteSize;
+
   return (
     <div className="w-full">
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept={ACCEPTED_IMAGE_INPUT}
         onChange={handleFileChange}
         className="hidden"
       />
 
-      {/* Empty State */}
       {!currentImageSrc ? (
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          className={`relative border-2 border-dashed rounded-lg p-10 md:p-14 text-center transition-all bg-[#F5F1EB]/60 ${
-            isDraggingFile
-              ? 'border-stone-800 bg-[#ECE6DD]'
-              : 'border-[#D8D0C5] hover:border-stone-400'
-          }`}
-        >
-          <div className="flex items-center justify-center gap-1.5 mb-6">
-            <div className="w-8 h-10 rounded-sm bg-[#9A3412]/80 transform -rotate-6 shadow-xs" />
-            <div className="w-8 h-12 rounded-sm bg-[#CA8A04]/80 transform -rotate-2 shadow-xs" />
-            <div className="w-8 h-14 rounded-sm bg-[#166534]/80 shadow-xs" />
-            <div className="w-8 h-12 rounded-sm bg-[#0E7490]/80 transform rotate-2 shadow-xs" />
-            <div className="w-8 h-10 rounded-sm bg-[#3730A3]/80 transform rotate-6 shadow-xs" />
-          </div>
-
-          <h2 className="font-serif text-2xl md:text-3xl text-stone-900 font-medium mb-3">
-            Deconstruct light into a chromatic narrative
-          </h2>
-          <p className="text-sm text-stone-600 max-w-lg mx-auto leading-relaxed mb-6 font-sans">
-            Drop any photograph here to extract faithful pigment frequencies, explore nuanced harmonic variations, and preview them across editorial and digital systems.
-          </p>
-
-          <div className="flex flex-wrap items-center justify-center gap-3 mb-10">
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-5 py-2.5 text-xs font-medium tracking-wide uppercase bg-[#1C1917] text-[#FBF9F5] rounded hover:bg-stone-800 transition-colors cursor-pointer shadow-xs"
-            >
-              Select Image from Computer
-            </button>
-            <span className="text-xs text-stone-500 font-mono">JPG · PNG · WEBP up to 25MB</span>
-          </div>
-
-          {/* Curated Sample Photographs */}
-          <div className="border-t border-[#E7E0D6] pt-6 max-w-2xl mx-auto">
-            <div className="flex items-center justify-between mb-3 text-left">
-              <span className="text-xs uppercase tracking-widest font-mono text-stone-500">
-                Or begin with curated reference studies
-              </span>
-              <span className="text-xs text-stone-400 font-serif italic">Click to load</span>
+        /* Empty state: uploading your own photo is the primary path */
+        <div className="space-y-8">
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => !isDecoding && fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            className={`debossed relative rounded-[20px] px-6 py-16 sm:py-24 text-center cursor-pointer transition-all ${
+              isDraggingFile ? 'ring-2 ring-ink/40 ring-offset-4 ring-offset-canvas' : ''
+            }`}
+          >
+            <div className="mx-auto mb-7 w-16 h-16 rounded-full sheet flex items-center justify-center">
+              <ImageUp className="w-6 h-6 text-ink-soft stroke-[1.5]" />
             </div>
+            <h1 className="letterpress font-serif text-4xl sm:text-5xl text-ink font-medium tracking-tight mb-3">
+              Start with a photograph
+            </h1>
+            <p className="text-sm text-ink-soft mb-8">Drop it here, or</p>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                fileInputRef.current?.click();
+              }}
+              disabled={isDecoding}
+              className="btn-ink !px-6 !py-3 !text-sm"
+            >
+              {isDecoding ? 'Opening…' : 'Choose a photo'}
+            </button>
+            <p className="eyebrow mt-6">JPG · PNG · WebP · HEIC</p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {isDecoding && (
+              <div className="absolute inset-0 rounded-[20px] bg-canvas/60 backdrop-blur-[2px] flex items-center justify-center">
+                <div className="w-5 h-5 border-2 border-ink/20 border-t-ink rounded-full animate-spin" />
+              </div>
+            )}
+          </div>
+
+          {/* Secondary: example photos */}
+          <div className="flex items-center justify-center gap-4">
+            <span className="text-xs text-ink-faint">Or try an example</span>
+            <div className="flex items-center gap-2">
               {SAMPLE_IMAGES.map((sample) => (
                 <button
                   key={sample.id}
-                  onClick={() =>
-                    onImageSelected(sample.src, {
-                      name: sample.title,
-                      width: 1200,
-                      height: 800,
-                    })
-                  }
-                  className="group text-left border border-stone-200 bg-white rounded p-2 hover:border-stone-400 hover:shadow-xs transition-all cursor-pointer flex sm:flex-col gap-2.5 items-center sm:items-start"
+                  onClick={() => loadSample(sample)}
+                  title={sample.title}
+                  className="w-11 h-11 rounded-full overflow-hidden cursor-pointer opacity-80 hover:opacity-100 transition-all shadow-[0_0_0_2px_var(--color-paper),0_1px_3px_rgba(74,58,40,0.25)] hover:scale-105"
                 >
-                  <div className="w-16 h-12 sm:w-full sm:h-24 overflow-hidden rounded-xs bg-stone-100 shrink-0">
-                    <img
-                      src={sample.src}
-                      alt={sample.title}
-                      referrerPolicy="no-referrer"
-                      draggable={false}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 select-none"
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-stone-900 truncate">{sample.title}</p>
-                    <p className="text-[11px] text-stone-500 truncate font-mono">{sample.category}</p>
-                  </div>
+                  <img
+                    src={sample.src}
+                    alt={sample.title}
+                    draggable={false}
+                    className="w-full h-full object-cover select-none"
+                  />
                 </button>
               ))}
             </div>
@@ -346,133 +340,93 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       ) : (
         /* Active Image View */
         <div className="space-y-3">
-          {/* Main Toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-stone-500 uppercase tracking-wider text-[11px]">
-                Source Photograph
-              </span>
-              {activeRegion && (
-                <span className="font-mono text-[10px] bg-amber-100 text-amber-900 px-2 py-0.5 rounded flex items-center gap-1 font-semibold">
-                  Region Filter Active
-                  <button
-                    onClick={clearSelectedRegion}
-                    className="hover:text-amber-950 font-bold ml-1 cursor-pointer"
-                    title="Remove region filter"
-                  >
-                    ×
-                  </button>
-                </span>
-              )}
-            </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              onClick={() => {
+                setEyedropperActive(!eyedropperActive);
+                setRegionSelectActive(false);
+              }}
+              aria-pressed={eyedropperActive}
+              className="btn-paper"
+              title="Pick a color from the photo"
+            >
+              <Crosshair className="w-3.5 h-3.5" />
+              <span>Pick color</span>
+            </button>
 
-            <div className="flex items-center gap-2">
-              {/* Eyedropper Toggle */}
-              <button
-                onClick={() => {
-                  setEyedropperActive(!eyedropperActive);
-                  setRegionSelectActive(false);
-                }}
-                className={`px-2.5 py-1 rounded border transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  eyedropperActive
-                    ? 'bg-stone-900 text-white border-stone-900 shadow-xs'
-                    : 'bg-white text-stone-700 border-stone-300 hover:border-stone-400'
-                }`}
-                title="Sample exact pixel color from image"
-              >
-                <Crosshair className="w-3.5 h-3.5" />
-                <span>Pixel Eyedropper</span>
-              </button>
+            <button
+              onClick={() => {
+                setRegionSelectActive(!regionSelectActive);
+                setEyedropperActive(false);
+              }}
+              aria-pressed={regionSelectActive}
+              className="btn-paper"
+              title="Extract colors from one area"
+            >
+              <Crop className="w-3.5 h-3.5" />
+              <span>Area</span>
+            </button>
 
-              {/* Region Crop Toggle */}
-              <button
-                onClick={() => {
-                  setRegionSelectActive(!regionSelectActive);
-                  setEyedropperActive(false);
-                }}
-                className={`px-2.5 py-1 rounded border transition-colors flex items-center gap-1.5 cursor-pointer ${
-                  regionSelectActive
-                    ? 'bg-stone-900 text-white border-stone-900 shadow-xs'
-                    : 'bg-white text-stone-700 border-stone-300 hover:border-stone-400'
-                }`}
-                title="Drag rectangle to isolate a sample region"
-              >
-                <Crop className="w-3.5 h-3.5" />
-                <span>Sample Region</span>
+            {activeRegion && (
+              <button onClick={clearSelectedRegion} className="btn-paper" title="Use the whole photo again">
+                <RotateCcw className="w-3 h-3" />
+                <span>Full photo</span>
               </button>
+            )}
 
-              {/* Replace Image */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="px-2.5 py-1 rounded border border-stone-300 bg-white text-stone-700 hover:border-stone-400 transition-colors flex items-center gap-1.5 cursor-pointer"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Replace</span>
-              </button>
-            </div>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isDecoding}
+              className="btn-paper ml-auto"
+              title="Use a different photo"
+            >
+              <RefreshCw className={`w-3 h-3 ${isDecoding ? 'animate-spin' : ''}`} />
+              <span>{isDecoding ? 'Opening…' : 'Replace'}</span>
+            </button>
           </div>
 
-          {/* Active Tool Guidance Notice */}
-          {regionSelectActive && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3 py-2 rounded text-xs flex items-center justify-between animate-in fade-in duration-150">
-              <div className="flex items-center gap-2 font-sans">
-                <Crop className="w-3.5 h-3.5 shrink-0 text-amber-700" />
-                <span>
-                  <strong>Region Tool Active:</strong> Click and drag a rectangle over the image to sample colors only from that area.
-                </span>
-              </div>
+          {(eyedropperActive || regionSelectActive) && (
+            <div
+              className={`flex items-center justify-between gap-3 px-3.5 py-2 rounded-full text-xs ${
+                eyedropperActive && paletteFull ? 'bg-amber-100 text-amber-900' : 'debossed text-ink-soft'
+              }`}
+            >
+              <span>
+                {regionSelectActive
+                  ? 'Drag across the photo'
+                  : paletteFull
+                  ? `Palette is full (${paletteCount}/${maxPaletteSize})`
+                  : `Click the photo to add a color · ${paletteCount}/${maxPaletteSize}`}
+              </span>
               <button
-                onClick={() => setRegionSelectActive(false)}
-                className="text-amber-800 hover:text-amber-950 font-mono text-[11px] underline ml-2 cursor-pointer"
+                onClick={() => {
+                  setEyedropperActive(false);
+                  setRegionSelectActive(false);
+                }}
+                className="font-medium text-ink hover:underline cursor-pointer"
               >
                 Done
               </button>
             </div>
           )}
 
-          {eyedropperActive && (
-            <div className={`border px-3 py-2 rounded text-xs flex items-center justify-between animate-in fade-in duration-150 ${
-              paletteCount >= maxPaletteSize
-                ? 'bg-amber-50 border-amber-300 text-amber-900'
-                : 'bg-stone-100 border-stone-300 text-stone-800'
-            }`}>
-              <div className="flex items-center gap-2 font-sans">
-                <Crosshair className="w-3.5 h-3.5 shrink-0 text-stone-700" />
-                <span>
-                  {paletteCount >= maxPaletteSize ? (
-                    <>
-                      <strong>Palette Limit Reached ({paletteCount}/{maxPaletteSize} tones):</strong> You have reached the maximum palette size. Remove a tone to sample more.
-                    </>
-                  ) : (
-                    <>
-                      <strong>Eyedropper Active ({paletteCount}/{maxPaletteSize} tones):</strong> Hover to inspect exact pixel values; click to append color to your palette.
-                    </>
-                  )}
-                </span>
-              </div>
-              <button
-                onClick={() => setEyedropperActive(false)}
-                className="text-stone-600 hover:text-stone-950 font-mono text-[11px] underline ml-2 cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          )}
-
-          {/* Image Container & Strict Coordinate Wrapper */}
-          <div className="relative rounded-md overflow-hidden bg-stone-950 border border-stone-300 shadow-sm flex items-center justify-center select-none">
-            {/* The tight image element with pointer-events handler overlay */}
+          {/* Photo mounted in a shallow well */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`debossed relative p-3 sm:p-4 flex items-center justify-center select-none ${
+              isDraggingFile ? 'ring-2 ring-ink/40' : ''
+            }`}
+          >
             <div
               className={`relative inline-block ${
-                eyedropperActive
-                  ? 'cursor-crosshair'
-                  : regionSelectActive
-                  ? 'cursor-crosshair'
-                  : 'cursor-default'
+                eyedropperActive || regionSelectActive ? 'cursor-crosshair' : 'cursor-default'
               }`}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
+              onPointerLeave={() => setHoverColor(null)}
               onClick={handleImageClick}
               ref={overlayRef}
               style={{ touchAction: 'none' }}
@@ -480,116 +434,77 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
               <img
                 ref={imgElementRef}
                 src={currentImageSrc}
-                alt="Source photograph for palette extraction"
+                alt="Source photograph"
                 referrerPolicy="no-referrer"
                 draggable={false}
                 onDragStart={(e) => e.preventDefault()}
-                className="max-h-[460px] w-auto max-w-full object-contain block select-none pointer-events-none"
+                className="max-h-[480px] w-auto max-w-full object-contain block select-none pointer-events-none rounded-[4px] shadow-[0_1px_2px_rgba(0,0,0,0.12),0_8px_20px_-10px_rgba(0,0,0,0.35)]"
               />
 
-              {/* Selection Box Render (Exact boundaries) */}
               {boxStyle && (
                 <div
-                  className="absolute border-2 border-dashed border-amber-400 bg-amber-400/20 pointer-events-none shadow-md backdrop-contrast-110 z-20"
+                  className="absolute border border-white bg-white/15 pointer-events-none z-20 shadow-[0_0_0_1px_rgba(0,0,0,0.45)]"
                   style={boxStyle}
-                >
-                  {/* Corner Anchors */}
-                  <div className="absolute -top-1 -left-1 w-2 h-2 bg-amber-400 rounded-full" />
-                  <div className="absolute -top-1 -right-1 w-2 h-2 bg-amber-400 rounded-full" />
-                  <div className="absolute -bottom-1 -left-1 w-2 h-2 bg-amber-400 rounded-full" />
-                  <div className="absolute -bottom-1 -right-1 w-2 h-2 bg-amber-400 rounded-full" />
-                </div>
+                />
               )}
 
-              {/* Eyedropper Magnifier Loupe */}
               {eyedropperActive && hoverColor && (
                 <div
                   className="absolute pointer-events-none transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center z-30"
                   style={{ left: hoverColor.screenX, top: hoverColor.screenY }}
                 >
                   <div
-                    className="w-11 h-11 rounded-full border-2 border-white shadow-xl flex items-center justify-center transition-colors duration-75 ring-1 ring-black/40"
+                    className="w-11 h-11 rounded-full border-2 border-white shadow-xl flex items-center justify-center ring-1 ring-black/30"
                     style={{ backgroundColor: hoverColor.hex }}
                   >
                     <div className="w-1.5 h-1.5 bg-white rounded-full mix-blend-difference" />
                   </div>
-                  <div className="mt-1 px-2 py-0.5 bg-stone-950/90 text-white font-mono text-[10px] rounded shadow-md flex items-center gap-1.5 border border-white/20 whitespace-nowrap">
-                    <span className="font-bold">{hoverColor.hex}</span>
-                    <span className="text-stone-300 font-sans">· {hoverColor.name}</span>
+                  <div className="mt-1 px-2 py-0.5 bg-ink/90 text-white font-mono text-[10px] rounded-full shadow-md whitespace-nowrap">
+                    {hoverColor.hex} · <span className="font-sans text-stone-300">{hoverColor.name}</span>
                   </div>
                 </div>
               )}
             </div>
 
-            {/* In-container Confirm/Cancel Floating Bar for Region Selection */}
             {pendingRegion && !isPointerSelecting && (
-              <div className="absolute bottom-4 z-30 bg-stone-900/90 backdrop-blur-md text-white px-3 py-2 rounded-md shadow-xl flex items-center gap-3 border border-stone-700 animate-in fade-in slide-in-from-bottom-2">
-                <span className="text-xs font-mono">
-                  Region: {Math.round(pendingRegion.width * 100)}% × {Math.round(pendingRegion.height * 100)}%
-                </span>
-                <button
-                  onClick={applySelectedRegion}
-                  className="px-2.5 py-1 bg-amber-500 hover:bg-amber-400 text-stone-950 font-semibold rounded text-xs transition-colors flex items-center gap-1 cursor-pointer"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  <span>Extract from Region</span>
-                </button>
+              <div className="absolute bottom-6 z-30 bg-ink/90 backdrop-blur-md text-white pl-4 pr-1.5 py-1.5 rounded-full shadow-xl flex items-center gap-3">
                 <button
                   onClick={clearSelectedRegion}
                   className="text-xs text-stone-300 hover:text-white transition-colors cursor-pointer"
                 >
                   Clear
                 </button>
+                <button
+                  onClick={applySelectedRegion}
+                  className="px-3 py-1 bg-paper text-ink font-semibold rounded-full text-xs flex items-center gap-1 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Use this area</span>
+                </button>
               </div>
             )}
 
-            {/* Processing Spinner Overlay */}
-            {isProcessing && (
-              <div className="absolute inset-0 bg-[#FBF9F5]/70 backdrop-blur-xs flex items-center justify-center z-40">
-                <div className="flex items-center gap-2 px-4 py-2 bg-stone-900 text-white rounded font-mono text-xs">
-                  <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Extracting faithful photographic spectrum...</span>
-                </div>
+            {(isProcessing || isDecoding) && (
+              <div className="absolute inset-0 rounded-[12px] bg-canvas/60 backdrop-blur-[2px] flex items-center justify-center z-40">
+                <div className="w-5 h-5 border-2 border-ink/20 border-t-ink rounded-full animate-spin" />
               </div>
             )}
           </div>
 
-          {/* Quick Preset Strip */}
-          <div className="flex items-center justify-between pt-1">
-            <div className="flex items-center gap-2 overflow-x-auto py-1">
-              <span className="text-[11px] font-mono text-stone-500 uppercase shrink-0">
-                Switch Reference:
-              </span>
-              {SAMPLE_IMAGES.map((sample) => (
-                <button
-                  key={sample.id}
-                  onClick={() =>
-                    onImageSelected(sample.src, {
-                      name: sample.title,
-                      width: 1200,
-                      height: 800,
-                    })
-                  }
-                  className={`text-xs px-2.5 py-1 rounded font-medium transition-colors shrink-0 cursor-pointer ${
-                    currentImageSrc === sample.src
-                      ? 'bg-stone-900 text-white shadow-2xs'
-                      : 'bg-white border border-stone-200 text-stone-700 hover:border-stone-400'
-                  }`}
-                >
-                  {sample.category}: {sample.title.split('&')[0]}
-                </button>
-              ))}
-            </div>
-
-            {activeRegion && (
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <span className="text-[11px] text-ink-faint">Examples</span>
+            {SAMPLE_IMAGES.map((sample) => (
               <button
-                onClick={clearSelectedRegion}
-                className="text-xs font-mono text-stone-600 hover:text-stone-950 flex items-center gap-1 underline cursor-pointer"
+                key={sample.id}
+                onClick={() => loadSample(sample)}
+                title={sample.title}
+                className={`w-6 h-6 rounded-full overflow-hidden cursor-pointer transition-opacity ${
+                  currentImageSrc === sample.src ? 'opacity-100 ring-1 ring-ink ring-offset-1 ring-offset-canvas' : 'opacity-50 hover:opacity-90'
+                }`}
               >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset to Full Photo</span>
+                <img src={sample.src} alt={sample.title} draggable={false} className="w-full h-full object-cover" />
               </button>
-            )}
+            ))}
           </div>
         </div>
       )}

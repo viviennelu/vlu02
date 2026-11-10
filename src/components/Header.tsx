@@ -1,14 +1,22 @@
 import React from 'react';
-import { Bookmark, Download, BookOpen } from 'lucide-react';
+import { Bookmark, Download } from 'lucide-react';
+
+type Tab = 'workspace' | 'previews' | 'collections';
 
 interface HeaderProps {
-  activeTab: 'workspace' | 'previews' | 'collections';
-  setActiveTab: (tab: 'workspace' | 'previews' | 'collections') => void;
+  activeTab: Tab;
+  setActiveTab: (tab: Tab) => void;
   savedCount: number;
   onOpenExport: () => void;
   onSavePalette: () => void;
   colorCount: number;
 }
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'workspace', label: 'Studio' },
+  { id: 'previews', label: 'Previews' },
+  { id: 'collections', label: 'Journal' },
+];
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
@@ -19,84 +27,57 @@ export const Header: React.FC<HeaderProps> = ({
   colorCount,
 }) => {
   return (
-    <header className="sticky top-0 z-40 bg-[#FBF9F5]/90 backdrop-blur-md border-b border-[#E7E0D6]">
-      <div className="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between gap-8">
-        {/* Zone 1: Brand / Placeholder mark */}
-        <div className="flex items-center gap-3 shrink-0">
-          <button
-            onClick={() => setActiveTab('workspace')}
-            className="flex items-center gap-2.5 text-left group cursor-pointer focus-visible:outline-none"
-          >
-            <span className="w-5 h-5 rounded-sm bg-[#1C1917] text-[#FBF9F5] flex items-center justify-center text-xs font-mono font-medium shadow-sm group-hover:bg-stone-700 transition-colors">
-              ◈
-            </span>
-            <span className="font-serif text-lg tracking-tight font-medium text-[#1C1917] whitespace-nowrap">
-              Photo to Color Palette Studio
-            </span>
-          </button>
-        </div>
+    <header className="sticky top-0 z-40 bg-canvas/85 backdrop-blur-md shadow-[0_1px_0_rgba(74,58,40,0.08),0_2px_0_rgba(255,255,255,0.6)]">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-4">
+        <button
+          onClick={() => setActiveTab('workspace')}
+          className="flex items-center gap-2.5 text-left cursor-pointer shrink-0"
+        >
+          <span
+            aria-hidden
+            className="w-6 h-6 rounded-full bg-[conic-gradient(from_200deg,#B4532A,#C9A227,#5F7F52,#3E6A86,#7A5C8E,#B4532A)] shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_1px_2px_rgba(0,0,0,0.15)]"
+          />
+          <span className="hidden sm:inline font-serif text-xl tracking-tight font-medium text-ink whitespace-nowrap">
+            Palette Studio
+          </span>
+        </button>
 
-        {/* Zone 2: Navigation Links */}
-        <nav className="hidden md:flex items-center gap-6 text-xs font-medium uppercase tracking-wider text-stone-600">
-          <button
-            onClick={() => setActiveTab('workspace')}
-            className={`transition-colors whitespace-nowrap py-1 cursor-pointer border-b-2 ${
-              activeTab === 'workspace'
-                ? 'border-[#1C1917] text-[#1C1917] font-semibold'
-                : 'border-transparent hover:text-[#1C1917]'
-            }`}
-          >
-            Studio Workspace
-          </button>
-
-          <button
-            onClick={() => setActiveTab('previews')}
-            className={`transition-colors whitespace-nowrap py-1 cursor-pointer border-b-2 ${
-              activeTab === 'previews'
-                ? 'border-[#1C1917] text-[#1C1917] font-semibold'
-                : 'border-transparent hover:text-[#1C1917]'
-            }`}
-          >
-            Design Previews & Roles
-          </button>
-
-          <button
-            onClick={() => setActiveTab('collections')}
-            className={`transition-colors whitespace-nowrap py-1 cursor-pointer border-b-2 flex items-center gap-1.5 ${
-              activeTab === 'collections'
-                ? 'border-[#1C1917] text-[#1C1917] font-semibold'
-                : 'border-transparent hover:text-[#1C1917]'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5 text-stone-600" />
-            <span>Visual Journal</span>
-            {savedCount > 0 && (
-              <span className="font-mono text-[10px] bg-stone-200 text-stone-800 px-1.5 py-0.2 rounded font-semibold">
-                {savedCount}
-              </span>
-            )}
-          </button>
+        <nav className="debossed flex items-center p-1 rounded-full text-xs font-medium">
+          {TABS.map((tab) => {
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                aria-current={active ? 'page' : undefined}
+                className={`px-2.5 sm:px-4 py-1.5 rounded-full transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                  active
+                    ? 'bg-paper text-ink shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_1px_3px_rgba(74,58,40,0.15)]'
+                    : 'text-ink-soft hover:text-ink'
+                }`}
+              >
+                {tab.label}
+                {tab.id === 'collections' && savedCount > 0 && (
+                  <span className="font-mono text-[10px] text-ink-faint">{savedCount}</span>
+                )}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Zone 3: Primary Actions */}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             onClick={onSavePalette}
             disabled={colorCount === 0}
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-800 hover:text-stone-950 border border-stone-300 hover:border-stone-400 bg-white rounded transition-colors whitespace-nowrap disabled:opacity-40 cursor-pointer shadow-2xs"
-            title="Record this palette and photo to your visual journal"
+            className="btn-paper"
+            title="Save to Journal"
           >
-            <Bookmark className="w-3.5 h-3.5 text-stone-700" />
-            <span>Record to Journal</span>
+            <Bookmark className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Save</span>
           </button>
-
-          <button
-            onClick={onOpenExport}
-            disabled={colorCount === 0}
-            className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium text-[#FBF9F5] bg-[#1C1917] hover:bg-stone-800 rounded transition-colors whitespace-nowrap disabled:opacity-40 shadow-xs cursor-pointer"
-          >
+          <button onClick={onOpenExport} disabled={colorCount === 0} className="btn-ink" title="Export">
             <Download className="w-3.5 h-3.5" />
-            <span>Export Palette</span>
+            <span className="hidden sm:inline">Export</span>
           </button>
         </div>
       </div>

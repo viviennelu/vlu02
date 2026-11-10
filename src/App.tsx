@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { ArrowRight } from 'lucide-react';
 import { Header } from './components/Header';
 import { ImageUploader } from './components/ImageUploader';
 import { PaletteDisplay } from './components/PaletteDisplay';
@@ -8,7 +9,7 @@ import { AddToneModal } from './components/AddToneModal';
 import { DesignPreviews } from './components/DesignPreviews';
 import { ExportModal } from './components/ExportModal';
 import { SavedCollectionsView } from './components/SavedCollectionsView';
-import { Toast } from './components/Toast';
+import { Toast, ToastTone } from './components/Toast';
 import {
   ColorData,
   PaletteVariationType,
@@ -22,54 +23,90 @@ import {
   savePaletteToStorage,
   updateSavedPalette,
   deleteSavedPalette,
+  loadStudioSession,
+  saveStudioSession,
 } from './utils/collectionStorage';
-import { SAMPLE_IMAGES } from './data/sampleImages';
+import { createDownscaledCopy } from './utils/imageDecoding';
+
+const MAX_PALETTE_SIZE = 10;
+
+/** Normalise weights so they sum to ~1, without mutating the inputs. */
+function rebalanceWeights(colors: ColorData[]): ColorData[] {
+  const total = colors.reduce((sum, c) => sum + (c.weight || 0.1), 0);
+  return colors.map((c) => ({ ...c, weight: Number(((c.weight || 0.1) / total).toFixed(2)) }));
+}
+
+/**
+ * Keep the untransformed base palette in step with the active palette's
+ * membership and order (removals, reorders, additions), so switching
+ * interpretation or resetting never resurrects removed tones or drops added ones.
+ */
+function syncBaseWithActive(base: ColorData[], active: ColorData[]): ColorData[] {
+  const byId = new Map(base.map((c) => [c.id, c]));
+  return active.map((c) => {
+    const b = byId.get(c.id);
+    return b ? b : { ...c, locked: false };
+  });
+}
 
 export default function App() {
+  // Restore the last working session (palette + photo) on refresh
+  const [restored] = useState(loadStudioSession);
+
   // Navigation
   const [activeTab, setActiveTab] = useState<'workspace' | 'previews' | 'collections'>('workspace');
 
-  // Image State (Defaulting to the architectural sample so the studio begins alive with color)
-  const [currentImageSrc, setCurrentImageSrc] = useState<string | null>(SAMPLE_IMAGES[0].src);
-  const [paletteTitle, setPaletteTitle] = useState<string>(SAMPLE_IMAGES[0].title);
+  // Image State
+  const [currentImageSrc, setCurrentImageSrc] = useState<string | null>(restored?.imageSrc ?? null);
+  const [paletteTitle, setPaletteTitle] = useState<string>(restored?.title ?? 'Untitled palette');
   const [activeRegion, setActiveRegion] = useState<CropRegion | null>(null);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
 
-  // Palette State
-  const [baseExtractedColors, setBaseExtractedColors] = useState<ColorData[]>([]);
-  const [activeColors, setActiveColors] = useState<ColorData[]>([]);
-  const [currentVariation, setCurrentVariation] = useState<PaletteVariationType>('original');
+  // Palette State. `baseExtractedColors` is the untransformed palette (extracted +
+  // user-added tones); `activeColors` is what the user sees, saves and exports.
+  const [baseExtractedColors, setBaseExtractedColors] = useState<ColorData[]>(restored?.baseColors ?? []);
+  const [activeColors, setActiveColors] = useState<ColorData[]>(restored?.activeColors ?? []);
+  // Untouched extraction (colors + order) that Reset returns to
+  const [originalColors, setOriginalColors] = useState<ColorData[]>(
+    restored?.originalColors ?? restored?.baseColors ?? []
+  );
+  const [currentVariation, setCurrentVariation] = useState<PaletteVariationType>(restored?.variation ?? 'original');
+
+  // When an image arrives together with its palette (restored session or a
+  // reopened journal entry), don't overwrite that palette with a fresh extraction.
+  const skipExtractionForSrc = useRef<string | null>(
+    restored?.imageSrc && restored.activeColors.length ? restored.imageSrc : null
+  );
+  const baseRef = useRef(baseExtractedColors);
+  baseRef.current = baseExtractedColors;
+  const variationRef = useRef(currentVariation);
+  variationRef.current = currentVariation;
 
   // Modals & Drawers
   const [editingColor, setEditingColor] = useState<ColorData | null>(null);
   const [isAddToneOpen, setIsAddToneOpen] = useState<boolean>(false);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
 
   // Saved Palettes
   const [savedPalettes, setSavedPalettes] = useState<SavedPalette[]>([]);
 
-  // Show Toast Helper
-  const triggerToast = useCallback((msg: string) => {
-    setToastMessage(msg);
+  const triggerToast = useCallback((message: string, tone: ToastTone = 'info') => {
+    setToast({ message, tone });
     setTimeout(() => {
-      setToastMessage((prev) => (prev === msg ? null : prev));
-    }, 2400);
+      setToast((prev) => (prev?.message === message ? null : prev));
+    }, tone === 'error' ? 4200 : 2400);
   }, []);
 
-  // Load saved collections on mount
   useEffect(() => {
-    const stored = getSavedPalettes();
-    setSavedPalettes(stored);
+    setSavedPalettes(getSavedPalettes());
   }, []);
 
-  // Perform browser-side color extraction whenever image or crop region changes
+  // Browser-side color extraction whenever image or crop region changes
   useEffect(() => {
-    if (!currentImageSrc) {
-      setBaseExtractedColors([]);
-      setActiveColors([]);
-      return;
-    }
+    if (!currentImageSrc) return;
+    if (!activeRegion && skipExtractionForSrc.current === currentImageSrc) return;
+    skipExtractionForSrc.current = null;
 
     let isMounted = true;
     setIsProcessing(true);
@@ -77,189 +114,212 @@ export default function App() {
     extractPaletteFromImage(currentImageSrc, 6, activeRegion || undefined)
       .then((colors) => {
         if (!isMounted) return;
-        setBaseExtractedColors(colors);
-        const transformed = generateVariation(colors, currentVariation);
-        setActiveColors(transformed);
+        // Tones the user added survive a region re-extraction of the same photo.
+        // (A new photo clears the base first, so nothing carries over.)
+        const carried = baseRef.current.filter((c) => c.userAdded);
+        const nextBase = [...colors, ...carried].slice(0, MAX_PALETTE_SIZE);
+        setOriginalColors(colors);
+        setBaseExtractedColors(nextBase);
+        setActiveColors(generateVariation(nextBase, variationRef.current));
         setIsProcessing(false);
       })
       .catch((err) => {
         console.error('Extraction error:', err);
-        if (isMounted) setIsProcessing(false);
+        if (!isMounted) return;
+        setIsProcessing(false);
+        triggerToast("Couldn't read colors from this photo", 'error');
       });
 
     return () => {
       isMounted = false;
     };
-  }, [currentImageSrc, activeRegion]);
+  }, [currentImageSrc, activeRegion, triggerToast]);
 
-  // Recalculate palette whenever variation changes
+  // Persist the working session (debounced). Large photos fall back to a
+  // 2048px copy so the session still fits in localStorage.
+  const persistedImage = useRef<{ src: string; copy: string } | null>(null);
+  useEffect(() => {
+    if (isProcessing) return;
+    const timer = setTimeout(async () => {
+      const session = {
+        title: paletteTitle,
+        imageSrc: currentImageSrc,
+        variation: currentVariation,
+        baseColors: baseExtractedColors,
+        originalColors,
+        activeColors,
+      };
+      if (persistedImage.current?.src === currentImageSrc) {
+        if (saveStudioSession({ ...session, imageSrc: persistedImage.current.copy })) return;
+      } else if (saveStudioSession(session)) {
+        return;
+      }
+      if (!currentImageSrc) return;
+      try {
+        const copy = await createDownscaledCopy(currentImageSrc, 2048, 0.9);
+        persistedImage.current = { src: currentImageSrc, copy };
+        saveStudioSession({ ...session, imageSrc: copy });
+      } catch {
+        // Not fatal: the session just won't survive a refresh.
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [paletteTitle, currentImageSrc, currentVariation, baseExtractedColors, activeColors, originalColors, isProcessing]);
+
   const applyVariation = useCallback(
     (variation: PaletteVariationType) => {
       if (baseExtractedColors.length === 0) return;
-
-      // Keep track of locked colors from activeColors
       const lockedMap = new Map(activeColors.filter((c) => c.locked).map((c) => [c.id, c]));
-
       const transformed = generateVariation(baseExtractedColors, variation);
-
-      // Merge locked colors
-      const merged = transformed.map((c) => {
-        if (lockedMap.has(c.id)) {
-          return lockedMap.get(c.id)!;
-        }
-        return c;
-      });
-
-      // Preserve manually added tones if they were locked
-      const manuallyAdded = activeColors.filter(
-        (c) => (c.origin === 'interpolated' || c.origin === 'curated-accent' || c.origin === 'custom') && c.locked
-      );
-      manuallyAdded.forEach((added) => {
-        if (!merged.some((m) => m.id === added.id) && merged.length < 10) {
-          merged.push(added);
-        }
-      });
-
-      setActiveColors(merged);
+      setActiveColors(transformed.map((c) => lockedMap.get(c.id) ?? c));
     },
     [baseExtractedColors, activeColors]
   );
 
-  // Handle switching variation
   const handleSelectVariation = (variation: PaletteVariationType) => {
     setCurrentVariation(variation);
     applyVariation(variation);
-    triggerToast(`Interpretation: ${variation.toUpperCase()}`);
+  };
+
+  // Reorder / remove / lock / shuffle from the palette display
+  const handlePaletteChange = (next: ColorData[]) => {
+    setActiveColors(next);
+    setBaseExtractedColors((prev) => syncBaseWithActive(prev, next));
   };
 
   // Image Selection
   const handleImageSelected = (src: string, meta?: { name: string; width: number; height: number }) => {
+    skipExtractionForSrc.current = null;
     setCurrentImageSrc(src);
     setActiveRegion(null);
     setCurrentVariation('original');
-    // Clear out previous colors so nothing leaks into the new image's extraction
     setBaseExtractedColors([]);
+    setOriginalColors([]);
     setActiveColors([]);
     if (meta?.name) {
       const cleanTitle = meta.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
       setPaletteTitle(cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1));
     }
-    triggerToast('Loaded new photograph');
   };
 
-  const MAX_PALETTE_SIZE = 10;
+  /**
+   * Single entry point for adding a tone (Add Tone modal or eyedropper).
+   * The tone joins both the base and active palettes, so it is saved,
+   * exported, and kept when switching interpretation.
+   */
+  const appendTone = (tone: ColorData): boolean => {
+    if (activeColors.length >= MAX_PALETTE_SIZE) {
+      triggerToast(`Palette is full (${MAX_PALETTE_SIZE} tones). Remove one to add another.`, 'error');
+      return false;
+    }
+    const existing = activeColors.find((c) => c.hex.toLowerCase() === tone.hex.toLowerCase());
+    if (existing) {
+      triggerToast(`${existing.name} is already in the palette`);
+      return false;
+    }
+    const added: ColorData = {
+      ...tone,
+      id: `added_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      weight: tone.weight || 0.1,
+      locked: false,
+      userAdded: true,
+    };
+    setActiveColors((prev) => rebalanceWeights([...prev, added]));
+    setBaseExtractedColors((prev) => rebalanceWeights([...prev, added]));
+    triggerToast(`Added ${added.name} · ${activeColors.length + 1}/${MAX_PALETTE_SIZE}`);
+    return true;
+  };
 
-  // Eyedropper Pixel Picked: Append sampled color without overwriting existing tones
   const handlePixelPicked = (sampled: {
     hex: string;
     rgb: { r: number; g: number; b: number };
     hsl: { h: number; s: number; l: number };
   }) => {
-    // 1. Enforce max palette size of 10 tones
-    if (activeColors.length >= MAX_PALETTE_SIZE) {
-      triggerToast(`Palette limit reached (${MAX_PALETTE_SIZE} tones). Remove an existing tone to sample more.`);
-      return;
-    }
-
-    // 2. Check if color already exists in palette
-    const existing = activeColors.find(
-      (c) => c.hex.toLowerCase() === sampled.hex.toLowerCase()
-    );
-    if (existing) {
-      triggerToast(`${existing.name} (${sampled.hex}) is already in your palette`);
-      return;
-    }
-
-    const newColor: ColorData = {
-      id: 'picked_' + Date.now(),
+    appendTone({
+      id: '',
       hex: sampled.hex,
       rgb: sampled.rgb,
       hsl: sampled.hsl,
-      weight: 0.10,
+      weight: 0.1,
       name: getColorName(sampled.hex),
-      locked: false,
       origin: 'extracted',
-      sourceNote: 'Exact pixel loupe sample from photo',
-    };
-
-    // 3. Preserve ALL existing colors and append the sampled color
-    const updated = [...activeColors, newColor];
-
-    // 4. Rebalance weights evenly
-    const totalWeight = updated.reduce((sum, c) => sum + (c.weight || 0.1), 0);
-    updated.forEach((c) => {
-      c.weight = Number(((c.weight || 0.1) / totalWeight).toFixed(2));
+      sourceNote: 'Sampled from photo',
     });
-
-    setActiveColors(updated);
-    setBaseExtractedColors((prev) => [...prev, newColor]);
-    triggerToast(`Added ${newColor.name} (${sampled.hex}) to palette (${updated.length}/${MAX_PALETTE_SIZE})`);
   };
 
-  // Save current palette to localStorage / Visual Journal
-  const handleSaveCurrentPalette = () => {
+  // Save current palette to the Visual Journal
+  const handleSaveCurrentPalette = async () => {
     if (activeColors.length === 0) return;
+    let thumbnail: string | undefined;
+    if (currentImageSrc) {
+      try {
+        thumbnail = await createDownscaledCopy(currentImageSrc, 1200);
+      } catch {
+        thumbnail = undefined;
+      }
+    }
     const saved = savePaletteToStorage(
       paletteTitle,
       activeColors,
       currentVariation,
-      currentImageSrc || undefined,
+      thumbnail,
       undefined,
-      'Field Study Studio',
-      'Captured from photograph. Preserving authentic chromatic atmosphere.',
-      'monograph'
+      '',
+      '',
+      'monograph',
+      originalColors
     );
+    if (!saved) {
+      triggerToast('Journal storage is full. Delete an entry and try again.', 'error');
+      return;
+    }
     setSavedPalettes((prev) => [saved, ...prev.filter((p) => p.id !== saved.id)]);
-    triggerToast(`Recorded "${paletteTitle}" to Visual Journal`);
+    triggerToast(`Saved "${saved.title}" to Journal`);
   };
 
-  // Update an existing saved palette in the Visual Journal
   const handleUpdateSavedPalette = (updatedPalette: SavedPalette) => {
-    const updatedList = updateSavedPalette(updatedPalette);
-    setSavedPalettes(updatedList);
-    triggerToast(`Updated "${updatedPalette.title}" in Visual Journal`);
+    setSavedPalettes(updateSavedPalette(updatedPalette));
+    triggerToast('Journal entry updated');
   };
 
-  // Delete saved palette
   const handleDeleteSavedPalette = (id: string) => {
-    const updated = deleteSavedPalette(id);
-    setSavedPalettes(updated);
-    triggerToast('Study removed from journal');
+    setSavedPalettes(deleteSavedPalette(id));
+    triggerToast('Entry removed');
   };
 
-  // Load a saved palette into studio
+  // Reopen a saved palette exactly as saved (no re-extraction)
   const handleLoadSavedPalette = (palette: SavedPalette) => {
-    setActiveColors(palette.colors);
-    setBaseExtractedColors(palette.colors);
+    const colors = palette.colors.map((c) => ({ ...c }));
+    skipExtractionForSrc.current = palette.imageThumbnail ?? null;
+    setCurrentImageSrc(palette.imageThumbnail ?? null);
+    setActiveRegion(null);
+    setActiveColors(colors);
+    setBaseExtractedColors(colors.map((c) => ({ ...c, locked: false })));
+    // Older entries didn't store the extraction; fall back to the saved palette
+    setOriginalColors((palette.originalColors ?? palette.colors).map((c) => ({ ...c })));
     setCurrentVariation(palette.variation);
     setPaletteTitle(palette.title);
-    if (palette.imageThumbnail) {
-      setCurrentImageSrc(palette.imageThumbnail);
-    }
     setActiveTab('workspace');
-    triggerToast(`Loaded "${palette.title}"`);
+    triggerToast(`Opened "${palette.title}"`);
   };
 
-  // Reset to original extraction
+  // Back to the photo's extracted colors in their extracted order: drops
+  // added tones, restores removed ones, undoes edits, locks and reordering.
   const handleResetOriginal = () => {
+    const source = originalColors.length > 0 ? originalColors : baseExtractedColors;
+    const fresh = source.map((c) => ({ ...c, locked: false }));
     setCurrentVariation('original');
-    setActiveColors(
-      baseExtractedColors.map((c) => ({
-        ...c,
-        locked: false,
-        origin: 'extracted',
-        sourceNote: '1:1 faithful photographic extraction',
-      }))
-    );
-    triggerToast('Reset to 1:1 original extraction');
+    setBaseExtractedColors(fresh);
+    setActiveColors(fresh);
+    triggerToast(`Reset to the original ${fresh.length} colors`);
   };
+
+  const hasWork = !!currentImageSrc || activeColors.length > 0;
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FBF9F5] text-[#1C1917] selection:bg-stone-300">
-      {/* Toast Notification */}
-      <Toast message={toastMessage} />
+    <div className="min-h-screen flex flex-col text-ink selection:bg-stone-300">
+      <Toast message={toast?.message ?? null} tone={toast?.tone} />
 
-      {/* Editorial Top Navigation Header */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -269,43 +329,40 @@ export default function App() {
         colorCount={activeColors.length}
       />
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8 md:py-10">
-        {/* VIEW 1: STUDIO WORKSPACE */}
-        {activeTab === 'workspace' && (
+      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-8 md:py-12">
+        {activeTab === 'workspace' && !hasWork && (
+          <div className="max-w-3xl mx-auto">
+            <ImageUploader
+              currentImageSrc={null}
+              onImageSelected={handleImageSelected}
+              onRegionSelected={setActiveRegion}
+              onPixelPicked={handlePixelPicked}
+              onError={(msg) => triggerToast(msg, 'error')}
+              activeRegion={activeRegion}
+              isProcessing={isProcessing}
+              paletteCount={0}
+              maxPaletteSize={MAX_PALETTE_SIZE}
+            />
+          </div>
+        )}
+
+        {activeTab === 'workspace' && hasWork && (
           <div className="space-y-10">
-            {/* Studio Workspace Title & Curatorial Subheading */}
-            <div className="border-b border-[#E7E0D6] pb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1.5 text-xs uppercase tracking-widest font-mono text-stone-500">
-                  <span>Photo · Palette Laboratory</span>
-                  <span>·</span>
-                  <span>Fidelity & Atmospheric Studies</span>
-                </div>
-                <h1 className="font-serif text-3xl sm:text-5xl font-medium tracking-tight text-stone-900 text-balance">
-                  {paletteTitle}
-                </h1>
-              </div>
+            <input
+              aria-label="Palette title"
+              value={paletteTitle}
+              onChange={(e) => setPaletteTitle(e.target.value)}
+              className="letterpress w-full bg-transparent font-serif text-3xl sm:text-5xl font-medium tracking-tight text-ink outline-none rounded-md -mx-1 px-1 hover:bg-black/[0.03] focus:bg-black/[0.03] transition-colors"
+            />
 
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setActiveTab('previews')}
-                  className="px-4 py-2 rounded text-xs font-semibold text-stone-800 bg-white border border-stone-300 hover:border-stone-500 transition-colors cursor-pointer shadow-xs"
-                >
-                  View Design Previews →
-                </button>
-              </div>
-            </div>
-
-            {/* Asymmetric Studio Columns: Image Exploration & Palette Studio */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-              {/* Left Column: Image Area */}
-              <div className="lg:col-span-5 space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
+              <div className="lg:col-span-5 lg:sticky lg:top-20">
                 <ImageUploader
                   currentImageSrc={currentImageSrc}
                   onImageSelected={handleImageSelected}
-                  onRegionSelected={(r) => setActiveRegion(r)}
+                  onRegionSelected={setActiveRegion}
                   onPixelPicked={handlePixelPicked}
+                  onError={(msg) => triggerToast(msg, 'error')}
                   activeRegion={activeRegion}
                   isProcessing={isProcessing}
                   paletteCount={activeColors.length}
@@ -313,9 +370,7 @@ export default function App() {
                 />
               </div>
 
-              {/* Right Column: Extracted Palette & Nuanced Variations */}
               <div className="lg:col-span-7 space-y-8">
-                {/* 1. Palette Variations Selector */}
                 {baseExtractedColors.length > 0 && (
                   <PaletteVariations
                     baseColors={baseExtractedColors}
@@ -325,54 +380,35 @@ export default function App() {
                   />
                 )}
 
-                {/* 2. Interactive Color Palette Display */}
                 {activeColors.length > 0 && (
                   <PaletteDisplay
                     colors={activeColors}
-                    onColorChange={setActiveColors}
+                    onColorChange={handlePaletteChange}
                     onEditColor={(c) => setEditingColor(c)}
                     onOpenAddTone={() => setIsAddToneOpen(true)}
                     onResetOriginal={handleResetOriginal}
                     onCopyText={(text, label) => triggerToast(label)}
                   />
                 )}
-              </div>
-            </div>
 
-            {/* Bottom Quick Context Teaser */}
-            {activeColors.length > 0 && (
-              <div className="border-t border-[#E7E0D6] pt-8">
-                <div className="bg-[#F5F1EB] rounded-lg p-6 flex flex-col sm:flex-row items-center justify-between gap-4 border border-[#E7E0D6]">
-                  <div className="space-y-1 text-center sm:text-left">
-                    <h4 className="font-serif text-lg font-semibold text-stone-900">
-                      Observe colors in production layouts & check contrast
-                    </h4>
-                    <p className="text-xs text-stone-600 font-sans max-w-xl">
-                      Review how this exact chromatic story functions in digital publication interfaces, architectural posters, and verified WCAG contrast matrices.
-                    </p>
-                  </div>
+                {activeColors.length > 0 && (
                   <button
                     onClick={() => setActiveTab('previews')}
-                    className="px-4 py-2 bg-[#1C1917] text-white rounded text-xs font-semibold hover:bg-stone-800 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+                    className="group inline-flex items-center gap-2 text-sm text-ink-soft hover:text-ink transition-colors cursor-pointer"
                   >
-                    Open Design Previews
+                    <span className="font-serif italic text-lg">See it in layouts</span>
+                    <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
                   </button>
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         )}
 
-        {/* VIEW 2: DESIGN PREVIEWS */}
         {activeTab === 'previews' && (
-          <DesignPreviews
-            colors={activeColors}
-            imageSrc={currentImageSrc}
-            paletteTitle={paletteTitle}
-          />
+          <DesignPreviews colors={activeColors} imageSrc={currentImageSrc} paletteTitle={paletteTitle} />
         )}
 
-        {/* VIEW 3: SAVED COLLECTIONS & VISUAL MEMORY JOURNAL */}
         {activeTab === 'collections' && (
           <SavedCollectionsView
             savedPalettes={savedPalettes}
@@ -382,40 +418,35 @@ export default function App() {
             onCopyText={(text, label) => triggerToast(label)}
             onSwitchToWorkspace={() => setActiveTab('workspace')}
             onSaveCurrentToJournal={handleSaveCurrentPalette}
+            canSaveCurrent={activeColors.length > 0}
           />
         )}
       </main>
 
-      {/* Color Editor Modal */}
       <ColorEditorModal
         color={editingColor}
         isOpen={!!editingColor}
         onClose={() => setEditingColor(null)}
         onSave={(updated) => {
-          setActiveColors(
-            activeColors.map((c) =>
-              c.id === updated.id ? { ...updated, origin: 'custom' } : c
-            )
+          const edited: ColorData = { ...updated, origin: 'custom' };
+          setActiveColors((prev) => prev.map((c) => (c.id === edited.id ? edited : c)));
+          // The edit becomes the new source for this tone, so it survives
+          // switching interpretation.
+          setBaseExtractedColors((prev) =>
+            prev.map((c) => (c.id === edited.id ? { ...edited, locked: false } : c))
           );
           triggerToast(`Updated ${updated.name}`);
         }}
       />
 
-      {/* Add Tone Modal (Image-Grounded Candidates) */}
       <AddToneModal
         isOpen={isAddToneOpen}
         onClose={() => setIsAddToneOpen(false)}
-        onAddColor={(newColor) => {
-          if (activeColors.length < 10) {
-            setActiveColors([...activeColors, newColor]);
-            triggerToast(`Added ${newColor.name} (${newColor.hex})`);
-          }
-        }}
+        onAddColor={appendTone}
         existingColors={activeColors}
         currentImageSrc={currentImageSrc}
       />
 
-      {/* Export Modal */}
       <ExportModal
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
@@ -424,20 +455,6 @@ export default function App() {
         imageSrc={currentImageSrc}
         onCopyText={(text, label) => triggerToast(label)}
       />
-
-      {/* Understated Editorial Footer */}
-      <footer className="border-t border-[#E7E0D6] py-6 bg-[#FBF9F5]">
-        <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono text-stone-500">
-          <div className="flex items-center gap-3">
-            <span>Photo to Color Palette Studio</span>
-            <span>·</span>
-            <span>Fidelity-Preserving Photographic Quantization</span>
-          </div>
-          <div>
-            <span>Local Archival Persistence · ISO & WCAG Contrast Validated</span>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

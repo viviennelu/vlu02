@@ -1,3 +1,7 @@
+import architectureSrc from '../assets/images/sample_architecture_1794129061529.jpg';
+import botanicalSrc from '../assets/images/sample_botanical_1794129062294.jpg';
+import coastalSrc from '../assets/images/sample_coastal_1794129062323.jpg';
+
 export interface SampleImage {
   id: string;
   title: string;
@@ -13,7 +17,7 @@ export const SAMPLE_IMAGES: SampleImage[] = [
     title: 'Brutalist Terracotta & Sky',
     subtitle: 'Cast Shadows · Limestone · Cobalt Blue',
     category: 'Architecture',
-    src: '/src/assets/images/sample_architecture_1794129061529.jpg',
+    src: architectureSrc,
     description: 'Crisp geometric planes, sun-warmed clay plaster, and deep Aegean daylight.',
   },
   {
@@ -21,7 +25,7 @@ export const SAMPLE_IMAGES: SampleImage[] = [
     title: 'Botanical Greenhouse Mist',
     subtitle: 'Monstera Leaves · Vermilion Blooms · Damp Glass',
     category: 'Flora',
-    src: '/src/assets/images/sample_botanical_1794129062294.jpg',
+    src: botanicalSrc,
     description: 'Deep forest greens, soft overcast silver light, and vibrant tropical accents.',
   },
   {
@@ -29,7 +33,7 @@ export const SAMPLE_IMAGES: SampleImage[] = [
     title: 'Nordic Basalt & Twilight Tide',
     subtitle: 'Basalt Sea Stacks · Indigo Swell · Dusty Rose Horizon',
     category: 'Landscape',
-    src: '/src/assets/images/sample_coastal_1794129062323.jpg',
+    src: coastalSrc,
     description: 'Crashing seafoam, cool oceanic slate, and pale twilight gradient.',
   },
 ];
